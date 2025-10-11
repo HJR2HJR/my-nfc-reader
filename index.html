@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NFC 讀取與導出工具</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .toast {
+            visibility: hidden;
+            min-width: 250px;
+            margin-left: -125px;
+            background-color: #333;
+            color: #fff;
+            text-align: center;
+            border-radius: 8px;
+            padding: 16px;
+            position: fixed;
+            z-index: 1;
+            left: 50%;
+            bottom: 30px;
+            opacity: 0;
+            transition: opacity 0.5s, visibility 0.5s;
+        }
+        .toast.show {
+            visibility: visible;
+            opacity: 1;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-md mx-auto bg-white dark:bg-gray-800 rounded-2xl shadow-lg overflow-hidden">
+        <div class="p-6">
+            <div class="flex items-center space-x-4 mb-6">
+                <div class="bg-blue-500 p-3 rounded-full">
+                    <i class="fas fa-wifi text-white text-xl"></i>
+                </div>
+                <div>
+                    <h1 class="text-xl font-bold">NFC 內容讀取器</h1>
+                    <p class="text-sm text-gray-500 dark:text-gray-400">可讀取NFC標籤中的網址或文字</p>
+                </div>
+            </div>
+
+            <!-- 真實掃描按鈕 -->
+            <button id="scan-btn" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-4 rounded-lg flex items-center justify-center space-x-2 transition-transform transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50">
+                <i class="fas fa-satellite-dish"></i>
+                <span>掃描NFC卡片</span>
+            </button>
+        </div>
+
+        <div class="px-6 pb-2">
+            <h2 class="text-lg font-semibold mb-2">已保存的內容</h2>
+            <div id="links-list" class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 h-64 overflow-y-auto space-y-2">
+                <!-- 內容條目將在這裡動態添加 -->
+                <p id="placeholder" class="text-gray-400 dark:text-gray-500 text-center mt-20">尚未掃描任何內容</p>
+            </div>
+        </div>
+
+        <div class="p-6 bg-gray-50 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700">
+             <!-- 导出按钮 -->
+            <button id="export-btn" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded-lg flex items-center justify-center space-x-2 transition-transform transform hover:scale-105 disabled:bg-gray-400 disabled:cursor-not-allowed disabled:transform-none" disabled>
+                <i class="fas fa-file-csv"></i>
+                <span>導出為 CSV 表格</span>
+            </button>
+        </div>
+    </div>
+    
+    <div id="toast" class="toast"></div>
+
+    <script>
+        const scanBtn = document.getElementById('scan-btn');
+        const exportBtn = document.getElementById('export-btn');
+        const linksList = document.getElementById('links-list');
+        const placeholder = document.getElementById('placeholder');
+        const toast = document.getElementById('toast');
+
+        let savedRecords = [];
+
+        // --- 真實NFC讀取功能 (已升級) ---
+        scanBtn.addEventListener('click', async () => {
+            if (!('NDEFReader' in window)) {
+                showToast("您的瀏覽器不支援 Web NFC");
+                const timestamp = new Date().getTime();
+                const newContent = `[模擬內容] example.com/${timestamp}`;
+                savedRecords.push(newContent);
+                updateLinksList();
+                showToast(`[模擬] 成功讀取: ${newContent}`);
+                return;
+            }
+
+            try {
+                const ndef = new NDEFReader();
+                await ndef.scan();
+                showToast("請將 NFC 卡片靠近手機背面...");
+
+                ndef.onreading = event => {
+                    const message = event.message;
+                    for (const record of message.records) {
+                        let content = '';
+                        // --- 新增：判斷記錄類型 ---
+                        if (record.recordType === "url") {
+                            const textDecoder = new TextDecoder();
+                            const url = textDecoder.decode(record.data).substring(1);
+                            const protocolCode = record.data[0];
+                            let protocol = '';
+                             switch (protocolCode) {
+                                case 0x01: protocol = 'http://www.'; break;
+                                case 0x02: protocol = 'https://www.'; break;
+                                case 0x03: protocol = 'http://'; break;
+                                case 0x04: protocol = 'https://'; break;
+                                default: protocol = '';
+                            }
+                            content = protocol + url;
+                            showToast(`成功讀取連結: ${content}`);
+                        } else if (record.recordType === "text") {
+                            const textDecoder = new TextDecoder();
+                            content = textDecoder.decode(record.data);
+                            // 移除文字記錄中可能存在的前綴語言碼 (例如 'en-US')
+                            content = content.substring(content.indexOf('\u0006') + 1);
+                            showToast(`成功讀取文字: ${content}`);
+                        }
+
+                        if (content && !savedRecords.includes(content)) {
+                            savedRecords.push(content);
+                            updateLinksList();
+                        }
+                    }
+                };
+            } catch (error) {
+                console.error("NFC 讀取錯誤: ", error);
+                showToast(`錯誤: ${error.message}`);
+            }
+        });
+        
+        // 导出数据为CSV文件
+        exportBtn.addEventListener('click', () => {
+            if (savedRecords.length === 0) {
+                showToast("沒有內容可以導出");
+                return;
+            }
+
+            let csvContent = "data:text/csv;charset=utf-8,";
+            csvContent += "內容\n"; // CSV表頭
+
+            savedRecords.forEach(record => {
+                const escapedRecord = `"${String(record).replace(/"/g, '""')}"`;
+                csvContent += escapedRecord + "\n";
+            });
+
+            const encodedUri = encodeURI(csvContent);
+            const linkElement = document.createElement("a");
+            linkElement.setAttribute("href", encodedUri);
+            linkElement.setAttribute("download", "nfc_records.csv");
+            document.body.appendChild(linkElement);
+
+            linkElement.click();
+            document.body.removeChild(linkElement);
+            showToast("CSV文件已開始下載");
+        });
+
+        // 更新界面上的列表
+        function updateLinksList() {
+            linksList.innerHTML = '';
+
+            if (savedRecords.length > 0) {
+                savedRecords.forEach((record, index) => {
+                    const linkItem = document.createElement('div');
+                    linkItem.className = 'flex items-center justify-between bg-white dark:bg-gray-600 p-3 rounded-lg shadow-sm';
+                    
+                    const linkText = document.createElement('span');
+                    linkText.textContent = record;
+                    linkText.className = 'truncate text-sm';
+                    
+                    const deleteBtn = document.createElement('button');
+                    deleteBtn.innerHTML = '<i class="fas fa-trash-alt text-red-500 hover:text-red-700"></i>';
+                    deleteBtn.className = 'ml-4';
+                    deleteBtn.onclick = () => removeLink(index);
+
+                    linkItem.appendChild(linkText);
+                    linkItem.appendChild(deleteBtn);
+                    linksList.appendChild(linkItem);
+                });
+            } else {
+                 linksList.appendChild(placeholder);
+            }
+            
+            exportBtn.disabled = savedRecords.length === 0;
+        }
+
+        // 移除一个条目
+        function removeLink(indexToRemove) {
+            savedRecords.splice(indexToRemove, 1);
+            updateLinksList();
+            showToast("內容已刪除");
+        }
+        
+        function showToast(message) {
+            toast.textContent = message;
+            toast.classList.add('show');
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+        
+        updateLinksList();
+    </script>
+</body>
+</html>
+
