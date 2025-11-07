@@ -145,17 +145,18 @@
                                 showToast('URL 記錄解析失敗');
                             }
                         } else if (record.recordType === "text") {
+                            // --- 還原：使用您原來的文字解析邏輯 ---
                             try {
-                                // 根據 NDEF 規範嚴格解析文本記錄
-                                const statusByte = record.data[0];
-                                // 獲取語言代碼長度 (bits 0-5)
-                                const langCodeLength = statusByte & 0x3F; 
-                                // 獲取編碼 (bit 7: 0=UTF-8, 1=UTF-16)
-                                const textEncoding = (statusByte & 0x80) === 0 ? 'utf-8' : 'utf-16'; 
-                                
-                                // 獲取實際的文本負載 (跳過狀態字節和語言代碼)
-                                const textPayload = record.data.slice(1 + langCodeLength);
-                                content = new TextDecoder(textEncoding).decode(textPayload);
+                                const textDecoder = new TextDecoder();
+                                content = textDecoder.decode(record.data);
+                                // 移除文字記錄中可能存在的前綴語言碼 (例如 'en-US')
+                                // 檢查是否存在特殊字符，如果不存在，則直接使用 content
+                                const specialCharIndex = content.indexOf('\u0006');
+                                if (specialCharIndex !== -1) {
+                                    content = content.substring(specialCharIndex + 1);
+                                }
+                                // 如果解碼後為空（例如只有語言碼），則跳過
+                                if (!content) continue;
                                 
                                 showToast(`成功讀取文字: ${content}`);
                             } catch (e) {
