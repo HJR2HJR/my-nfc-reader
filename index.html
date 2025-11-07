@@ -54,7 +54,12 @@
         </div>
 
         <div class="px-6 pb-2">
-            <h2 class="text-lg font-semibold mb-2">已保存的內容</h2>
+            <!-- 優化 #2：添加了計數器 -->
+            <div class="flex justify-between items-center mb-2">
+                <h2 class="text-lg font-semibold">已保存的內容</h2>
+                <span id="record-count" class="text-sm font-medium text-gray-500 dark:text-gray-400">總計: 0</span>
+            </div>
+            
             <div id="links-list" class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 h-64 overflow-y-auto space-y-2">
                 <!-- 內容條目將在這裡動態添加 -->
                 <p id="placeholder" class="text-gray-400 dark:text-gray-500 text-center mt-20">尚未掃描任何內容</p>
@@ -78,6 +83,7 @@
         const linksList = document.getElementById('links-list');
         const placeholder = document.getElementById('placeholder');
         const toast = document.getElementById('toast');
+        const recordCount = document.getElementById('record-count'); // 優化 #2：獲取計數器元素
 
         let savedRecords = [];
 
@@ -85,6 +91,7 @@
         scanBtn.addEventListener('click', async () => {
             if (!('NDEFReader' in window)) {
                 showToast("您的瀏覽器不支援 Web NFC");
+                // 模擬器代碼保持不變
                 const timestamp = new Date().getTime();
                 const newContent = `[模擬內容] example.com/${timestamp}`;
                 savedRecords.push(newContent);
@@ -98,33 +105,66 @@
                 await ndef.scan();
                 showToast("請將 NFC 卡片靠近手機背面...");
 
+                // --- 優化 #1：重寫NFC解析邏輯 ---
                 ndef.onreading = event => {
                     const message = event.message;
                     for (const record of message.records) {
                         let content = '';
-                        // --- 新增：判斷記錄類型 ---
+                        
                         if (record.recordType === "url") {
-                            const textDecoder = new TextDecoder();
-                            const url = textDecoder.decode(record.data).substring(1);
-                            const protocolCode = record.data[0];
-                            let protocol = '';
-                             switch (protocolCode) {
-                                case 0x01: protocol = 'http://www.'; break;
-                                case 0x02: protocol = 'https://www.'; break;
-                                case 0x03: protocol = 'http://'; break;
-                                case 0x04: protocol = 'https://'; break;
-                                default: protocol = '';
+                            try {
+                                const textDecoder = new TextDecoder();
+                                const protocolCode = record.data[0]; // 獲取協議字節
+                                
+                                // 解碼協議字節 *之後* 的 URL 負載
+                                const urlPayload = record.data.slice(1);
+                                const url = textDecoder.decode(urlPayload);
+
+                                let protocol = '';
+                                // 根據 NDEF 規範分配協議
+                                switch (protocolCode) {
+                                    case 0x01: protocol = 'http://www.'; break;
+                                    case 0x02: protocol = 'https://www.'; break;
+                                    case 0x03: protocol = 'http://'; break;
+                                    case 0x04: protocol = 'https://'; break; // 修正點：這才是 https://
+                                    case 0x05: protocol = 'tel:'; break;
+                                    case 0x06: protocol = 'mailto:'; break;
+                                    default: protocol = ''; // 未知或無協議
+                                }
+                                
+                                // 組合協議和URL
+                                // 為防止某些不規範的標籤重複寫入協議，做個檢查
+                                if (url.startsWith('http://') || url.startsWith('https://')) {
+                                    content = url;
+                                } else {
+                                    content = protocol + url;
+                                }
+                                showToast(`成功讀取連結: ${content}`);
+                            } catch (e) {
+                                console.error('URL record parsing error:', e);
+                                showToast('URL 記錄解析失敗');
                             }
-                            content = protocol + url;
-                            showToast(`成功讀取連結: ${content}`);
                         } else if (record.recordType === "text") {
-                            const textDecoder = new TextDecoder();
-                            content = textDecoder.decode(record.data);
-                            // 移除文字記錄中可能存在的前綴語言碼 (例如 'en-US')
-                            content = content.substring(content.indexOf('\u0006') + 1);
-                            showToast(`成功讀取文字: ${content}`);
+                            try {
+                                // 根據 NDEF 規範嚴格解析文本記錄
+                                const statusByte = record.data[0];
+                                // 獲取語言代碼長度 (bits 0-5)
+                                const langCodeLength = statusByte & 0x3F; 
+                                // 獲取編碼 (bit 7: 0=UTF-8, 1=UTF-16)
+                                const textEncoding = (statusByte & 0x80) === 0 ? 'utf-8' : 'utf-16'; 
+                                
+                                // 獲取實際的文本負載 (跳過狀態字節和語言代碼)
+                                const textPayload = record.data.slice(1 + langCodeLength);
+                                content = new TextDecoder(textEncoding).decode(textPayload);
+                                
+                                showToast(`成功讀取文字: ${content}`);
+                            } catch (e) {
+                                console.error('Text record parsing error:', e);
+                                showToast('文本記錄解析失敗');
+                            }
                         }
 
+                        // 檢查內容有效且不重複
                         if (content && !savedRecords.includes(content)) {
                             savedRecords.push(content);
                             updateLinksList();
@@ -189,6 +229,9 @@
                  linksList.appendChild(placeholder);
             }
             
+            // 優化 #2：更新計數器顯示
+            recordCount.textContent = `總計: ${savedRecords.length}`;
+            
             exportBtn.disabled = savedRecords.length === 0;
         }
 
@@ -206,9 +249,18 @@
                 toast.classList.remove('show');
             }, 3000);
         }
+
+        // --- 優化 #3：添加退出/刷新提醒 ---
+        window.addEventListener('beforeunload', (event) => {
+            if (savedRecords.length > 0) {
+                // 這是觸發瀏覽器自帶確認框的標準方法
+                event.preventDefault();
+                event.returnValue = ''; // 兼容 Chrome
+                return ''; // 兼容舊版瀏覽器
+            }
+        });
         
         updateLinksList();
     </script>
 </body>
 </html>
-
