@@ -54,7 +54,7 @@
         </div>
 
         <div class="px-6 pb-2">
-            <!-- 優化 #2：添加了計數器 -->
+            <!-- 新增功能 #1：計數器 -->
             <div class="flex justify-between items-center mb-2">
                 <h2 class="text-lg font-semibold">已保存的內容</h2>
                 <span id="record-count" class="text-sm font-medium text-gray-500 dark:text-gray-400">總計: 0</span>
@@ -83,7 +83,8 @@
         const linksList = document.getElementById('links-list');
         const placeholder = document.getElementById('placeholder');
         const toast = document.getElementById('toast');
-        const recordCount = document.getElementById('record-count'); // 優化 #2：獲取計數器元素
+        // 新增功能 #1：獲取計數器元素
+        const recordCount = document.getElementById('record-count'); 
 
         let savedRecords = [];
 
@@ -105,49 +106,47 @@
                 await ndef.scan();
                 showToast("請將 NFC 卡片靠近手機背面...");
 
-                // --- 優化 #1：重寫NFC解析邏輯 ---
                 ndef.onreading = event => {
                     const message = event.message;
                     for (const record of message.records) {
                         let content = '';
+                        const textDecoder = new TextDecoder();
                         
+                        // --- 關鍵修復：正確處理 URL ---
                         if (record.recordType === "url") {
                             try {
-                                const textDecoder = new TextDecoder();
-                                const protocolCode = record.data[0]; // 獲取協議字節
-                                
-                                // 解碼協議字節 *之後* 的 URL 負載
-                                const urlPayload = record.data.slice(1);
-                                const url = textDecoder.decode(urlPayload);
+                                const protocolCode = record.data[0];
 
-                                let protocol = '';
-                                // 根據 NDEF 規範分配協議
                                 switch (protocolCode) {
-                                    case 0x01: protocol = 'http://www.'; break;
-                                    case 0x02: protocol = 'https://www.'; break;
-                                    case 0x03: protocol = 'http://'; break;
-                                    case 0x04: protocol = 'https://'; break; // 修正點：這才是 https://
-                                    case 0x05: protocol = 'tel:'; break;
-                                    case 0x06: protocol = 'mailto:'; break;
-                                    default: protocol = ''; // 未知或無協議
-                                }
-                                
-                                // 組合協議和URL
-                                // 為防止某些不規範的標籤重複寫入協議，做個檢查
-                                if (url.startsWith('http://') || url.startsWith('https://')) {
-                                    content = url;
-                                } else {
-                                    content = protocol + url;
+                                    case 0x01: // http://www.
+                                        content = 'http://www.' + textDecoder.decode(record.data.slice(1));
+                                        break;
+                                    case 0x02: // https://www.
+                                        content = 'https://www.' + textDecoder.decode(record.data.slice(1));
+                                        break;
+                                    case 0x03: // http://
+                                        content = 'http://' + textDecoder.decode(record.data.slice(1));
+                                        break;
+                                    case 0x04: // https://
+                                        content = 'https://' + textDecoder.decode(record.data.slice(1));
+                                        break;
+                                    case 0x00: // 無協議前綴，僅 URL
+                                        content = textDecoder.decode(record.data.slice(1));
+                                        break;
+                                    default:   // 未知協議代碼 (例如您的 'h' = 0x68)
+                                        // 假定整個數據都是 URL
+                                        content = textDecoder.decode(record.data);
+                                        break;
                                 }
                                 showToast(`成功讀取連結: ${content}`);
                             } catch (e) {
                                 console.error('URL record parsing error:', e);
                                 showToast('URL 記錄解析失敗');
                             }
+                        
+                        // --- 保留您原來的 Text 邏輯 ---
                         } else if (record.recordType === "text") {
-                            // --- 還原：使用您原來的文字解析邏輯 ---
                             try {
-                                const textDecoder = new TextDecoder();
                                 content = textDecoder.decode(record.data);
                                 // 移除文字記錄中可能存在的前綴語言碼 (例如 'en-US')
                                 // 檢查是否存在特殊字符，如果不存在，則直接使用 content
@@ -230,7 +229,7 @@
                  linksList.appendChild(placeholder);
             }
             
-            // 優化 #2：更新計數器顯示
+            // 新增功能 #1：更新計數器顯示
             recordCount.textContent = `總計: ${savedRecords.length}`;
             
             exportBtn.disabled = savedRecords.length === 0;
@@ -251,7 +250,7 @@
             }, 3000);
         }
 
-        // --- 優化 #3：添加退出/刷新提醒 ---
+        // --- 新增功能 #2：添加退出/刷新提醒 ---
         window.addEventListener('beforeunload', (event) => {
             if (savedRecords.length > 0) {
                 // 這是觸發瀏覽器自帶確認框的標準方法
